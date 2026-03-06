@@ -162,6 +162,70 @@ async def test_form_zones_multiple_zones(hass: HomeAssistant):
     assert result["step_id"] == "zones"
     assert len(flow.data[CONF_ZONES]) == 2
 
+async def test_form_zones_creates_entry_via_csv(hass: HomeAssistant):
+    """Test zones step supports CSV import without manual zone fields."""
+    flow = DMPCustomConfigFlow()
+    flow.hass = hass
+    flow.data = {
+        "panel_name": "Test Panel",
+        CONF_ZONES: []
+    }
+
+    zones_input = {
+        "zones_csv": (
+            "zone_number,zone_name,zone_class\n"
+            "001,Front Door,wired_door\n"
+            "002,Living Motion,wired_motion\n"
+        )
+    }
+
+    with patch.object(flow, 'async_create_entry', return_value=None) as mock_create:
+        await flow.async_step_zones(zones_input)
+        mock_create.assert_called_once()
+        call_args = mock_create.call_args
+        zones = call_args.kwargs["data"][CONF_ZONES]
+        assert len(zones) == 2
+        assert zones[0][CONF_ZONE_NUMBER] == "001"
+        assert zones[1][CONF_ZONE_CLASS] == "wired_motion"
+
+async def test_form_zones_missing_manual_fields_error(hass: HomeAssistant):
+    """Test zones step requires manual fields if CSV is not provided."""
+    flow = DMPCustomConfigFlow()
+    flow.hass = hass
+    flow.data = {
+        "panel_name": "Test Panel",
+        CONF_ZONES: []
+    }
+
+    result = await flow.async_step_zones(
+        {
+            CONF_ZONE_NAME: "",
+            CONF_ZONE_NUMBER: "",
+            CONF_ZONE_CLASS: "wired_door",
+        }
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "zones"
+    assert result["errors"]["base"] == "missing_zone_fields"
+
+async def test_form_zones_invalid_csv_error(hass: HomeAssistant):
+    """Test zones step reports invalid CSV errors."""
+    flow = DMPCustomConfigFlow()
+    flow.hass = hass
+    flow.data = {
+        "panel_name": "Test Panel",
+        CONF_ZONES: []
+    }
+
+    result = await flow.async_step_zones(
+        {"zones_csv": "zone_number,zone_name\n001,MissingClass\n"}
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "zones"
+    assert result["errors"]["base"] == "invalid_zones_csv"
+
 
 
 @pytest.fixture
@@ -308,6 +372,75 @@ async def test_options_flow_zone_dict_creation(hass: HomeAssistant, mock_config_
         
         schema = result["data_schema"]
         assert any(key for key in schema.schema if hasattr(key, 'schema') and CONF_ZONES in str(key))
+
+async def test_options_flow_import_zones_csv_replace(
+    hass: HomeAssistant, mock_config_entry, mock_entity_registry
+):
+    """CSV import can replace all zones."""
+    flow = OptionsFlowHandler(mock_config_entry)
+    flow.hass = hass
+
+    user_input = {
+        "zones_csv": (
+            "zone_number,zone_name,zone_class\n"
+            "010,CSV Door,wired_door\n"
+            "011,CSV Motion,wired_motion\n"
+        ),
+        "zones_csv_replace": True,
+    }
+
+    with patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry") as mock_entries:
+        mock_entries.return_value = []
+
+        with patch.object(flow, "async_create_entry", return_value=None) as mock_create:
+            await flow.async_step_init(user_input)
+            mock_create.assert_called_once()
+            call_args = mock_create.call_args
+            zones = call_args.kwargs["data"][CONF_ZONES]
+            assert len(zones) == 2
+            assert zones[0][CONF_ZONE_NUMBER] == "010"
+            assert zones[1][CONF_ZONE_CLASS] == "wired_motion"
+
+async def test_options_flow_import_zones_csv_merge(
+    hass: HomeAssistant, mock_config_entry, mock_entity_registry
+):
+    """CSV import can merge with existing zones when replace is disabled."""
+    flow = OptionsFlowHandler(mock_config_entry)
+    flow.hass = hass
+
+    user_input = {
+        "zones_csv": "zone_number,zone_name,zone_class\n003,Back Door,wired_door\n",
+        "zones_csv_replace": False,
+    }
+
+    with patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry") as mock_entries:
+        mock_entries.return_value = []
+
+        with patch.object(flow, "async_create_entry", return_value=None) as mock_create:
+            await flow.async_step_init(user_input)
+            mock_create.assert_called_once()
+            call_args = mock_create.call_args
+            zones = call_args.kwargs["data"][CONF_ZONES]
+            assert len(zones) == 3
+            assert any(z[CONF_ZONE_NUMBER] == "003" for z in zones)
+
+async def test_options_flow_import_zones_csv_invalid(
+    hass: HomeAssistant, mock_config_entry, mock_entity_registry
+):
+    """Invalid CSV should return form with CSV error."""
+    flow = OptionsFlowHandler(mock_config_entry)
+    flow.hass = hass
+
+    user_input = {
+        "zones_csv": "zone_number,zone_name\n001,MissingClass\n",
+        "zones_csv_replace": True,
+    }
+
+    with patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry") as mock_entries:
+        mock_entries.return_value = []
+        result = await flow.async_step_init(user_input)
+        assert result["type"] == FlowResultType.FORM
+        assert result["errors"]["base"] == "invalid_zones_csv"
 
 @pytest.mark.asyncio
 async def test_async_get_options_flow(hass: HomeAssistant, mock_config_entry):

@@ -3,6 +3,32 @@
 I use this integration, it's fantastic, and thank you so much to everyone that has contributed!
 
 That said, it seems to break often with updates. I'm having codex handle the problems so I can get back up and running.
+Also, I had an idea to bulk import zones in csv format. Lightly tested, seems to work well.
+Currently, lightly tested and working on 2026.3 with an XR150.
+
+CSV Example. Paste this into the csv box to add the 3 zones-
+
+zone_number,zone_name,zone_class
+530,Test 1,battery_motion
+531,Test 2,battery_window
+532,Test3,battery_door
+
+
+supports these zone classes:
+
+  - default
+  - battery_door
+  - wired_door
+  - battery_glassbreak
+  - wired_glassbreak
+  - battery_motion
+  - wired_motion
+  - battery_siren
+  - wired_siren
+  - battery_smoke
+  - wired_smoke
+  - battery_window
+  - wired_window
 
 # Summary of Changes from Codex
 
@@ -58,3 +84,38 @@ That said, it seems to break often with updates. I'm having codex handle the pro
 - Updated listener tests to validate corrected server lifecycle behavior.
 - Added options-flow regression coverage for missing optional fields.
 - Reason: ensure the fixes above are protected against regressions.
+
+## Experimental CSV import and zone-management improvements
+
+- Added CSV zone import to Options/Reconfigure flow:
+  - New fields in options UI:
+    - `zones_csv` (multiline CSV paste)
+    - `zones_csv_replace` (replace all vs merge)
+  - Required CSV headers: `zone_number, zone_name, zone_class`
+  - Added validation for:
+    - missing headers
+    - missing row values
+    - invalid `zone_class`
+    - duplicate `zone_number`
+  - Reason: make bulk zone management practical without manual one-by-one entry.
+
+- Added CSV zone import to initial hub setup flow:
+  - The `zones` setup step now supports either:
+    - manual single-zone entry, or
+    - CSV paste import and immediate completion.
+  - Added setup errors:
+    - `invalid_zones_csv`
+    - `missing_zone_fields` (manual path only)
+  - Reason: remove requirement to manually create at least one zone before finishing setup.
+
+- Improved zone removal consistency after options update:
+  - Zone removals now use explicit zone-number set difference (`current` vs `new`) instead of fragile unique-id splitting.
+  - Entity cleanup matches removed zone numbers reliably.
+  - Added zone device-registry cleanup for removed zones.
+  - Reason: ensure removed zones disappear from both options/config and HA entity/device views.
+
+- Added tests for new behavior:
+  - Options CSV import: replace mode, merge mode, invalid CSV.
+  - Setup CSV import: happy path and error paths.
+  - Zone removal: verifies removed zone device is deleted from registry.
+  - Reason: protect CSV and cleanup behavior from regressions.

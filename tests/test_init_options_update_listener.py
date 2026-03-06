@@ -285,3 +285,48 @@ async def test_options_update_filters_by_zone_number(hass: HomeAssistant, mock_c
         assert "binary_sensor.zone_001" in removed_entity_ids
         assert "binary_sensor.zone_010" in removed_entity_ids
         assert len(removed_entity_ids) == 2
+
+async def test_options_update_removes_zone_device(hass: HomeAssistant, mock_config_entry, mock_entity_registry):
+    """Removing a zone should remove the zone device from the device registry."""
+    hass.data[DOMAIN] = {
+        mock_config_entry.entry_id: mock_config_entry.data.copy(),
+        LISTENER: Mock()
+    }
+
+    entry_with_options = MockConfigEntry(
+        domain=DOMAIN,
+        data=mock_config_entry.data,
+        options={
+            CONF_ZONES: [
+                {
+                    CONF_ZONE_NAME: "Front Door",
+                    CONF_ZONE_NUMBER: "001",
+                    CONF_ZONE_CLASS: "wired_door"
+                }
+            ]
+        },
+        entry_id=mock_config_entry.entry_id
+    )
+
+    mock_device_registry = Mock()
+    removed_zone_device = Mock()
+    removed_zone_device.id = "device-zone-002"
+
+    def _get_device(*, identifiers=None, **kwargs):
+        if identifiers and (DOMAIN, "dmp-12345-zone-002") in identifiers:
+            return removed_zone_device
+        return None
+
+    mock_device_registry.async_get_device = Mock(side_effect=_get_device)
+    mock_device_registry.async_remove_device = Mock()
+
+    with patch("homeassistant.helpers.entity_registry.async_get", return_value=mock_entity_registry), \
+            patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry", return_value=[]), \
+            patch("homeassistant.helpers.device_registry.async_get", return_value=mock_device_registry):
+
+        hass.config_entries.async_update_entry = Mock()
+        hass.config_entries.async_reload = AsyncMock()
+
+        await options_update_listener(hass, entry_with_options)
+
+        mock_device_registry.async_remove_device.assert_called_once_with("device-zone-002")
