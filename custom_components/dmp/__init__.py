@@ -5,6 +5,7 @@ import logging
 
 from copy import deepcopy
 
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 #from homeassistant.components import network as net
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
@@ -83,39 +84,51 @@ async def async_unload_entry(hass, entry):
 async def options_update_listener(hass, entry):
     _LOGGER.debug("Options flow completed.")
     entity_registry = er.async_get(hass)
+    device_registry = dr.async_get(hass)
     config = dict(entry.data)
     options = dict(entry.options)
     if options:
         _LOGGER.debug("Updated options found: %s" % options)
         """Handle options update."""
+        new_zones = options.get(CONF_ZONES, [])
+        active_zones = {str(z[CONF_ZONE_NUMBER]) for z in new_zones}
+        current_zones = config.get(CONF_ZONES, [])
+        removed_zone_numbers = {
+            str(z.get(CONF_ZONE_NUMBER))
+            for z in current_zones
+            if str(z.get(CONF_ZONE_NUMBER)) not in active_zones
+        }
+
         # Remove Entities
         entries = er.async_entries_for_config_entry(
             entity_registry, entry.entry_id
         )
-        entry_map = {e.entity_id: e for e in entries}
-        active_zones = [z[CONF_ZONE_NUMBER] for z in options.get(CONF_ZONES, [])]
-        _LOGGER.debug("Zones found in options: %s" % active_zones)
+        _LOGGER.debug("Zones found in options: %s" % sorted(active_zones))
+        _LOGGER.debug("Zones removed from options: %s", sorted(removed_zone_numbers))
         deleted_entries = []
-        for emk in entry_map.keys():
-            unique_id = entry_map[emk].unique_id or ""
-            unique_id_parts = unique_id.split('-')
-            if (
-                len(unique_id_parts) > 3
-                and unique_id_parts[2] == 'zone'
-                and (
-                    unique_id_parts[3]
-                    not in active_zones
-                    )
-            ):
-                deleted_entries.append(emk)
+        for entity_entry in entries:
+            unique_id = entity_entry.unique_id or ""
+            for zone_num in removed_zone_numbers:
+                zone_token = f"-zone-{zone_num}"
+                if zone_token in unique_id:
+                    deleted_entries.append(entity_entry.entity_id)
+                    break
         _LOGGER.debug("Zone entities to be deleted: %s", deleted_entries)
         for de in deleted_entries:
             entity_registry.async_remove(de)
 
+        # Remove now-empty zone devices to keep the device list in sync.
+        account_number = str(config.get(CONF_PANEL_ACCOUNT_NUMBER))
+        for zone_num in removed_zone_numbers:
+            zone_identifier = (DOMAIN, f"dmp-{account_number}-zone-{zone_num}")
+            zone_device = device_registry.async_get_device(identifiers={zone_identifier})
+            if zone_device is not None:
+                device_registry.async_remove_device(zone_device.id)
+
         # Get and replace zones config
         _LOGGER.debug("Current config zones: %s" % config[CONF_ZONES])
-        _LOGGER.debug("New config zones: %s" % options.get(CONF_ZONES, []))
-        config[CONF_ZONES] = options.get(CONF_ZONES, [])
+        _LOGGER.debug("New config zones: %s" % new_zones)
+        config[CONF_ZONES] = new_zones
         hass.config_entries.async_update_entry(
             entry,
             data=config,

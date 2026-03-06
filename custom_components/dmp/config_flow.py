@@ -1,4 +1,6 @@
+import csv
 from copy import deepcopy
+import io
 import logging
 from typing import Any, Dict, Optional
 
@@ -39,6 +41,88 @@ from .const import (
 from .const import CONF_ZONES, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+CONF_ZONES_CSV = "zones_csv"
+CONF_ZONES_CSV_REPLACE = "zones_csv_replace"
+
+VALID_ZONE_CLASSES = {
+    "default",
+    DEV_TYPE_BATTERY_DOOR,
+    DEV_TYPE_BATTERY_GLASSBREAK,
+    DEV_TYPE_BATTERY_MOTION,
+    DEV_TYPE_BATTERY_SIREN,
+    DEV_TYPE_BATTERY_SMOKE,
+    DEV_TYPE_BATTERY_WINDOW,
+    DEV_TYPE_WIRED_DOOR,
+    DEV_TYPE_WIRED_GLASSBREAK,
+    DEV_TYPE_WIRED_MOTION,
+    DEV_TYPE_WIRED_SIREN,
+    DEV_TYPE_WIRED_SMOKE,
+    DEV_TYPE_WIRED_WINDOW,
+}
+
+
+def _parse_zones_csv(zones_csv: str) -> list[dict[str, str]]:
+    """Parse zone CSV data into zone dicts."""
+    csv_text = zones_csv.strip()
+    if not csv_text:
+        return []
+
+    reader = csv.DictReader(io.StringIO(csv_text))
+    if not reader.fieldnames:
+        raise ValueError("CSV data is missing header row")
+
+    fieldname_map: dict[str, str] = {}
+    for fieldname in reader.fieldnames:
+        if fieldname is None:
+            continue
+        normalized = fieldname.strip().lower()
+        fieldname_map[normalized] = fieldname
+
+    required = {"zone_number", "zone_name", "zone_class"}
+    if not required.issubset(fieldname_map):
+        raise ValueError("CSV must include zone_number, zone_name, zone_class")
+
+    parsed_zones: list[dict[str, str]] = []
+    seen_numbers: set[str] = set()
+    for row_num, row in enumerate(reader, start=2):
+        zone_number = (row.get(fieldname_map["zone_number"]) or "").strip()
+        zone_name = (row.get(fieldname_map["zone_name"]) or "").strip()
+        zone_class = (row.get(fieldname_map["zone_class"]) or "").strip()
+
+        if not zone_number or not zone_name or not zone_class:
+            raise ValueError(f"Row {row_num} is missing required values")
+        if zone_class not in VALID_ZONE_CLASSES:
+            raise ValueError(f"Row {row_num} has invalid zone_class '{zone_class}'")
+        if zone_number in seen_numbers:
+            raise ValueError(f"Row {row_num} has duplicate zone_number '{zone_number}'")
+
+        seen_numbers.add(zone_number)
+        parsed_zones.append(
+            {
+                CONF_ZONE_NAME: zone_name,
+                CONF_ZONE_NUMBER: zone_number,
+                CONF_ZONE_CLASS: zone_class,
+            }
+        )
+
+    return parsed_zones
+
+
+def _zone_form_schema() -> vol.Schema:
+    """Build zone form schema with manual and CSV import options."""
+    return vol.Schema(
+        {
+            vol.Optional(CONF_ZONE_NAME): cv.string,
+            vol.Optional(CONF_ZONE_NUMBER): cv.string,
+            vol.Optional(CONF_ZONE_CLASS, default="default"): SENSOR_TYPES,
+            vol.Optional(CONF_ADD_ANOTHER): cv.boolean,
+            vol.Optional(CONF_ZONES_CSV): selector(
+                {"text": {"multiline": True, "multiple": False}}
+            ),
+        },
+        extra=vol.ALLOW_EXTRA,
+    )
 
 SENSOR_TYPES = selector(
     {
@@ -98,17 +182,6 @@ AREA_SCHEMA = vol.Schema(
 )
 
 
-ZONE_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_ZONE_NAME): cv.string,
-        vol.Required(CONF_ZONE_NUMBER): cv.string,
-        vol.Optional(CONF_ZONE_CLASS, default="default"): SENSOR_TYPES,
-        vol.Optional(CONF_ADD_ANOTHER): cv.boolean,
-    },
-    extra=vol.ALLOW_EXTRA,
-)
-
-
 class DMPCustomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """DMP Custom config flow."""
 
@@ -139,14 +212,39 @@ class DMPCustomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_zones(self, user_input: Optional[Dict[str, Any]] = None):
         errors: Dict[str, str] = {}
         if user_input is not None:
-            self.data[CONF_ZONES].append(user_input)
-            if user_input.get("add_another", False):
-                return await self.async_step_zones()
-            return self.async_create_entry(
-                title=self.data[CONF_PANEL_NAME], data=self.data
-            )
+            zones_csv = (user_input.get(CONF_ZONES_CSV) or "").strip()
+            if zones_csv:
+                try:
+                    csv_zones = _parse_zones_csv(zones_csv)
+                except ValueError as err:
+                    _LOGGER.warning("Invalid zones CSV input in setup flow: %s", err)
+                    errors["base"] = "invalid_zones_csv"
+                else:
+                    self.data[CONF_ZONES].extend(csv_zones)
+                    return self.async_create_entry(
+                        title=self.data[CONF_PANEL_NAME], data=self.data
+                    )
+            else:
+                zone_name = (user_input.get(CONF_ZONE_NAME) or "").strip()
+                zone_number = (user_input.get(CONF_ZONE_NUMBER) or "").strip()
+                zone_class = user_input.get(CONF_ZONE_CLASS, "default")
+                if not zone_name or not zone_number:
+                    errors["base"] = "missing_zone_fields"
+                else:
+                    self.data[CONF_ZONES].append(
+                        {
+                            CONF_ZONE_NAME: zone_name,
+                            CONF_ZONE_NUMBER: zone_number,
+                            CONF_ZONE_CLASS: zone_class,
+                        }
+                    )
+                    if user_input.get(CONF_ADD_ANOTHER, False):
+                        return await self.async_step_zones()
+                    return self.async_create_entry(
+                        title=self.data[CONF_PANEL_NAME], data=self.data
+                    )
         return self.async_show_form(
-            step_id="zones", data_schema=ZONE_SCHEMA, errors=errors
+            step_id="zones", data_schema=_zone_form_schema(), errors=errors
         )
 
     @staticmethod
@@ -175,6 +273,29 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         zones_dict = {z[CONF_ZONE_NUMBER]: z[CONF_ZONE_NAME] for z in zones}
         if user_input is not None:
             updated_zones = deepcopy(self._config_entry.data[CONF_ZONES])
+            zones_csv = (user_input.get(CONF_ZONES_CSV) or "").strip()
+            if zones_csv:
+                try:
+                    csv_zones = _parse_zones_csv(zones_csv)
+                except ValueError as err:
+                    _LOGGER.warning("Invalid zones CSV input: %s", err)
+                    errors["base"] = "invalid_zones_csv"
+                else:
+                    if user_input.get(CONF_ZONES_CSV_REPLACE, True):
+                        updated_zones = csv_zones
+                    else:
+                        by_number = {
+                            zone[CONF_ZONE_NUMBER]: zone for zone in updated_zones
+                        }
+                        for zone in csv_zones:
+                            by_number[zone[CONF_ZONE_NUMBER]] = zone
+                        updated_zones = list(by_number.values())
+                    if not errors:
+                        return self.async_create_entry(
+                            title="",
+                            data={CONF_ZONES: updated_zones},
+                        )
+
             selected_zones = user_input.get(CONF_ZONES, list(zones_dict.keys()))
             deleted_zones = [
                 z[CONF_ZONE_NUMBER]
@@ -217,6 +338,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional(CONF_ZONE_NAME): cv.string,
                 vol.Optional(CONF_ZONE_NUMBER): cv.string,
                 vol.Optional(CONF_ZONE_CLASS, default="default"): SENSOR_TYPES,
+                vol.Optional(CONF_ZONES_CSV): selector(
+                    {"text": {"multiline": True, "multiple": False}}
+                ),
+                vol.Optional(CONF_ZONES_CSV_REPLACE, default=True): cv.boolean,
             }
         )
         return self.async_show_form(

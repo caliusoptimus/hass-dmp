@@ -1,5 +1,9 @@
 {
   "config": {
+    "error": {
+      "invalid_zones_csv": "CSV is invalid. Required headers: zone_number, zone_name, zone_class.",
+      "missing_zone_fields": "Enter Zone Name and Zone Number, or paste CSV."
+    },
     "step": {
       "user": {
         "data": {
@@ -25,14 +29,18 @@
           "zone_name": "Zone Name",
           "zone_number": "Zone Number",
           "zone_class": "Zone Device Class",
-          "add_another": "Add another zone?"
+          "add_another": "Add another zone?",
+          "zones_csv": "Import Zones CSV"
         },
-        "description": "Add a zone to your DMP panel.",
+        "description": "Add a zone to your DMP panel, or paste CSV with headers: zone_number, zone_name, zone_class.",
         "title": "DMP Zone Configuration"
       }
     }
   },
   "options": {
+    "error": {
+      "invalid_zones_csv": "CSV is invalid. Required headers: zone_number, zone_name, zone_class."
+    },
     "step": {
       "init": {
         "title": "Manage Zones",
@@ -40,9 +48,11 @@
           "zones": "Existing Zones: Uncheck to remove.",
           "zone_name": "Zone Name",
           "zone_number": "Zone Number",
-          "zone_class": "Zone Device Class"
+          "zone_class": "Zone Device Class",
+          "zones_csv": "Import Zones CSV",
+          "zones_csv_replace": "Replace existing zones with CSV"
         },
-        "description": "Remove existing zones or add a new zone."
+        "description": "Remove existing zones or add a new zone. You can also paste CSV with headers: zone_number, zone_name, zone_class."
       }
     }
   }
