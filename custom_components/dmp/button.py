@@ -23,7 +23,7 @@ class DMPRefreshStatusButton(ButtonEntity):
         config = hass.data[DOMAIN][config_entry.entry_id]
         self._panel_name = config.get(CONF_PANEL_NAME)
         self._accountNum = config.get(CONF_PANEL_ACCOUNT_NUMBER)
-        self._listener = self._hass.data[DOMAIN][LISTENER]
+        self._listener = config.get(LISTENER) or self._hass.data[DOMAIN][LISTENER]
         self._name = "Refresh Status"
 
     async def async_added_to_hass(self):

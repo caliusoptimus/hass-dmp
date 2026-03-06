@@ -33,11 +33,10 @@ class DMPZoneBypassSwitch(SwitchEntity):
         self._config_entry = config_entry
         config = hass.data[DOMAIN][config_entry.entry_id]
         self._accountNum = config.get(CONF_PANEL_ACCOUNT_NUMBER)
-        self._listener = self._hass.data[DOMAIN][LISTENER]
+        self._listener = config.get(LISTENER) or self._hass.data[DOMAIN][LISTENER]
         self._device_name = entity_config.get(CONF_ZONE_NAME)
         self._name = "%s Bypass" % entity_config.get(CONF_ZONE_NAME)
         self._number = entity_config.get(CONF_ZONE_NUMBER)
-        self._device_class = "switch"
         self._panel = self._listener.getPanels()[str(self._accountNum)]
         self._state = False
         zoneBypassObj = {
@@ -70,11 +69,6 @@ class DMPZoneBypassSwitch(SwitchEntity):
     @property
     def is_on(self):
         return self._state
-
-    @property
-    def device_class(self):
-        """Return the class of the device"""
-        return self._device_class
 
     @property
     def unique_id(self):

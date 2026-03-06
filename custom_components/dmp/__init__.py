@@ -30,16 +30,20 @@ async def async_setup_entry(hass, entry) -> bool:
     """Set up platform from a ConfigEntry."""
     hass.data.setdefault(DOMAIN, {})
     config = dict(entry.data)
-    # Create Options Callback
-    entry.add_update_listener(options_update_listener)
+    # Keep listener lifecycle tied to the config entry.
+    entry.async_on_unload(entry.add_update_listener(options_update_listener))
     _LOGGER.debug("Loaded config %s", config)
     # Create and start the DMP Listener
     listener = DMPListener(hass, config)
-    listener_task = asyncio.create_task(listener.listen())
-    await listener_task
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, listener.stop)
+    await listener.listen()
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, listener.stop)
+    )
     hass.data[DOMAIN][LISTENER] = listener
-    hass.data[DOMAIN][entry.entry_id] = config
+    # Store per-entry runtime data; include listener for multi-entry safety.
+    entry_data = dict(config)
+    entry_data[LISTENER] = listener
+    hass.data[DOMAIN][entry.entry_id] = entry_data
     panel = DMPPanel(hass, config)
     _LOGGER.debug("Panel account number: %s", panel.getAccountNumber())
     listener.addPanel(panel)
@@ -52,12 +56,27 @@ async def async_setup_entry(hass, entry) -> bool:
 
 async def async_unload_entry(hass, entry):
     _LOGGER.debug("Unloading entry.")
-    listener = hass.data[DOMAIN][LISTENER]
-    unload_ok = await hass.config_entries.async_unload_platforms(
+    entry_data = hass.data[DOMAIN].get(entry.entry_id, {})
+    listener = entry_data.get(LISTENER) or hass.data[DOMAIN].get(LISTENER)
+    unload_platforms_ok = await hass.config_entries.async_unload_platforms(
         entry, PLATFORMS
-        ) and await listener.stop()
+    )
+    listener_ok = True
+    if listener is not None:
+        listener_ok = await listener.stop()
+    unload_ok = unload_platforms_ok and listener_ok
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
+        if hass.data[DOMAIN].get(LISTENER) is listener:
+            replacement_listener = None
+            for value in hass.data[DOMAIN].values():
+                if isinstance(value, dict) and LISTENER in value:
+                    replacement_listener = value[LISTENER]
+                    break
+            if replacement_listener is None:
+                hass.data[DOMAIN].pop(LISTENER, None)
+            else:
+                hass.data[DOMAIN][LISTENER] = replacement_listener
     return unload_ok
 
 
@@ -74,29 +93,29 @@ async def options_update_listener(hass, entry):
             entity_registry, entry.entry_id
         )
         entry_map = {e.entity_id: e for e in entries}
-        active_zones = [
-            z[CONF_ZONE_NUMBER]
-            for z in options[CONF_ZONES]
-        ]
+        active_zones = [z[CONF_ZONE_NUMBER] for z in options.get(CONF_ZONES, [])]
         _LOGGER.debug("Zones found in options: %s" % active_zones)
         deleted_entries = []
         for emk in entry_map.keys():
+            unique_id = entry_map[emk].unique_id or ""
+            unique_id_parts = unique_id.split('-')
             if (
-                entry_map[emk].unique_id.split('-')[2] == 'zone'
+                len(unique_id_parts) > 3
+                and unique_id_parts[2] == 'zone'
                 and (
-                    entry_map[emk].unique_id.split('-')[3]
+                    unique_id_parts[3]
                     not in active_zones
                     )
             ):
                 deleted_entries.append(emk)
-        _LOGGER.debug("Zone entities to be deleted: " % deleted_entries)
+        _LOGGER.debug("Zone entities to be deleted: %s", deleted_entries)
         for de in deleted_entries:
             entity_registry.async_remove(de)
 
         # Get and replace zones config
         _LOGGER.debug("Current config zones: %s" % config[CONF_ZONES])
-        _LOGGER.debug("New config zones: %s" % config[CONF_ZONES])
-        config[CONF_ZONES] = options[CONF_ZONES]
+        _LOGGER.debug("New config zones: %s" % options.get(CONF_ZONES, []))
+        config[CONF_ZONES] = options.get(CONF_ZONES, [])
         hass.config_entries.async_update_entry(
             entry,
             data=config,
@@ -346,18 +365,21 @@ class DMPListener():
         # ip = await net.async_get_source_ip(self._hass)
         # Temporary fix for multi-homed networking issues
         ip = '0.0.0.0'
-        listener = await asyncio.start_server(self.handle_connection, ip,
-                                            self._port)
-        addr = listener.sockets[0].getsockname()
+        self._server = await asyncio.start_server(self.handle_connection, ip,
+                                                  self._port)
+        addr = self._server.sockets[0].getsockname()
         _LOGGER.info(f"Listening on {addr}:{self._port}")
-        self._listener = listener.serve_forever()
 
-    async def stop(self):
+    async def stop(self, event=None):
         """ Stop TCP server """
+        _LOGGER.debug("Stop called with event: %s", event)
+        if self._server is None:
+            return True
         _LOGGER.info("Stop called. Closing server")
         # Make sure sever is closed before reloading
         self._server.close()
         await self._server.wait_closed()
+        self._server = None
         return True
 
     async def handle_connection(self, reader, writer):
@@ -425,7 +447,7 @@ class DMPListener():
                         "zoneNumber": zoneNumber,
                         "zoneState": True
                         }
-                    panel.updateBypassZone(zoneNumber, zoneObj)
+                    panel.updateTroubleZone(zoneNumber, zoneObj)
                 elif (   # Restore & Reset
                     eventCode == 'Zy'
                     or eventCode == 'Zr'
@@ -463,6 +485,9 @@ class DMPListener():
                         )
                     areaNumber = out[0]
                     areaName = out[1]
+                    areaState = panel.getArea().get(
+                        "areaState", AlarmControlPanelState.DISARMED
+                    )
                     if (systemCode == "OP"):  # Disarm
                         areaState = AlarmControlPanelState.DISARMED
                         # do a manual status query - bypassed zones are reset but no message for it 
@@ -516,8 +541,12 @@ class DMPListener():
                 connected = False
 
     async def updateStatus(self):
-        for panelName, panel in self._panels.items():
+        areaStatus = None
+        zoneStatus = None
+        for panel in self._panels.values():
             status = await panel._dmpSender.status()
+            if not status:
+                continue
             areaStatus = status[0]
             zoneStatus = status[1]
             for zone, zoneData in zoneStatus.items():
@@ -544,7 +573,8 @@ class DMPListener():
                         panel.updateBatteryZone(zone, faultZone)
                     elif zoneData['status'] == 'Normal':
                         panel.updateBatteryZone(zone, clearZone)
-        self.setStatusAttributes(areaStatus, zoneStatus)
+        if areaStatus is not None and zoneStatus is not None:
+            self.setStatusAttributes(areaStatus, zoneStatus)
         await self.updateHASS()
 
     def setStatusAttributes(self, areaStatus, zoneStatus):
@@ -563,5 +593,5 @@ class DMPListener():
 
     async def updateHASS(self):
         # call to update the hass object
-        for callback in self._callbacks:
+        for callback in list(self._callbacks):
             await callback()

@@ -160,14 +160,12 @@ async def test_listener_start_and_listen():
         mock_socket = Mock()
         mock_socket.getsockname.return_value = ("0.0.0.0", 40001)
         mock_server.sockets = [mock_socket]
-        mock_server.serve_forever = Mock()
         mock_start_server.return_value = mock_server
 
         await listener.listen()
 
         mock_start_server.assert_called_once_with(listener.handle_connection, "0.0.0.0", 40001)
-        mock_server.serve_forever.assert_called_once()
-        assert listener._listener == mock_server.serve_forever.return_value
+        assert listener._server == mock_server
 
 
 @pytest.mark.asyncio
@@ -175,8 +173,7 @@ async def test_listener_stop():
     """Test listener stop."""
     listener = DMPListener(Mock(), {CONF_HOME_AREA: "01", CONF_AWAY_AREA: "02", CONF_PANEL_LISTEN_PORT: 40001})
 
-    with pytest.raises(AttributeError):
-        await listener.stop()
+    assert await listener.stop() is True
 
     mock_server = Mock()
     mock_server.close = Mock()

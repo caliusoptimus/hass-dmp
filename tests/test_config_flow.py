@@ -276,6 +276,26 @@ async def test_options_flow_no_changes(hass: HomeAssistant, mock_config_entry, m
             call_args = mock_create.call_args
             assert len(call_args.kwargs['data'][CONF_ZONES]) == 2
 
+async def test_options_flow_handles_missing_optional_add_fields(
+    hass: HomeAssistant, mock_config_entry, mock_entity_registry
+):
+    """Options flow should not fail when optional add-zone fields are omitted."""
+    flow = OptionsFlowHandler(mock_config_entry)
+    flow.hass = hass
+
+    user_input = {
+        CONF_ZONES: ["001", "002"],
+    }
+
+    with patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry") as mock_entries:
+        mock_entries.return_value = []
+
+        with patch.object(flow, 'async_create_entry', return_value=None) as mock_create:
+            await flow.async_step_init(user_input)
+            mock_create.assert_called_once()
+            call_args = mock_create.call_args
+            assert len(call_args.kwargs['data'][CONF_ZONES]) == 2
+
 async def test_options_flow_zone_dict_creation(hass: HomeAssistant, mock_config_entry, mock_entity_registry):
     """Test zone dictionary is created correctly."""
     flow = OptionsFlowHandler(mock_config_entry)
@@ -296,5 +316,4 @@ async def test_async_get_options_flow(hass: HomeAssistant, mock_config_entry):
     options_flow = flow.async_get_options_flow(mock_config_entry)
     options_flow.hass = hass
     assert isinstance(options_flow, OptionsFlowHandler)
-    assert options_flow.config_entry is mock_config_entry
-
+    assert options_flow._config_entry is mock_config_entry

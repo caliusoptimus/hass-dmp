@@ -31,6 +31,7 @@ from .const import (
     DEV_TYPE_WIRED_DOOR,
     DEV_TYPE_WIRED_GLASSBREAK,
     DEV_TYPE_WIRED_MOTION,
+    DEV_TYPE_WIRED_SIREN,
     DEV_TYPE_WIRED_SMOKE,
     DEV_TYPE_WIRED_WINDOW,
 )
@@ -60,7 +61,7 @@ SENSOR_TYPES = selector(
                 },
                 {"label": "Motion Detector (Wired)", "value": DEV_TYPE_WIRED_MOTION},
                 {"label": "Siren (Battery Powered)", "value": DEV_TYPE_BATTERY_SIREN},
-                {"label": "Siren (Wired)", "value": DEV_TYPE_WIRED_MOTION},
+                {"label": "Siren (Wired)", "value": DEV_TYPE_WIRED_SIREN},
                 {
                     "label": "Smoke Detector (Battery Powered)",
                     "value": DEV_TYPE_BATTERY_SMOKE,
@@ -159,7 +160,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     """Handles options flow for the component."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self.config_entry = config_entry
+        # HA 2026.3 made OptionsFlow.config_entry a read-only property.
+        # Keep our own reference for compatibility across HA versions.
+        self._config_entry = config_entry
 
     async def async_step_init(
         self, user_input: Dict[str, Any] = None
@@ -168,27 +171,35 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         errors: Dict[str, str] = {}
         # Get a list of zones for the UI since each zone has multiple
         # sensors.
-        zones = dict(self.config_entry.data)[CONF_ZONES]
+        zones = dict(self._config_entry.data)[CONF_ZONES]
         zones_dict = {z[CONF_ZONE_NUMBER]: z[CONF_ZONE_NAME] for z in zones}
         if user_input is not None:
-            updated_zones = deepcopy(self.config_entry.data[CONF_ZONES])
-            deleted_zones = deleted_zones = [
+            updated_zones = deepcopy(self._config_entry.data[CONF_ZONES])
+            selected_zones = user_input.get(CONF_ZONES, list(zones_dict.keys()))
+            deleted_zones = [
                 z[CONF_ZONE_NUMBER]
                 for z in zones
-                if z[CONF_ZONE_NUMBER] not in user_input[CONF_ZONES]
+                if z[CONF_ZONE_NUMBER] not in selected_zones
             ]
 
-            # Get lisf of deleted entity_id and remove from config
+            # Remove deleted zones from config data.
             for d in deleted_zones:
                 updated_zones = [e for e in updated_zones if e["zone_number"] != d]
 
-            # Add new zones to config
-            if user_input[CONF_ZONE_CLASS] != "default":
+            # Add new zone to config only when all fields are provided.
+            new_zone_name = user_input.get(CONF_ZONE_NAME)
+            new_zone_number = user_input.get(CONF_ZONE_NUMBER)
+            new_zone_class = user_input.get(CONF_ZONE_CLASS, "default")
+            if (
+                new_zone_class != "default"
+                and new_zone_name
+                and new_zone_number
+            ):
                 updated_zones.append(
                     {
-                        CONF_ZONE_NAME: user_input[CONF_ZONE_NAME],
-                        CONF_ZONE_NUMBER: user_input[CONF_ZONE_NUMBER],
-                        CONF_ZONE_CLASS: user_input[CONF_ZONE_CLASS],
+                        CONF_ZONE_NAME: new_zone_name,
+                        CONF_ZONE_NUMBER: new_zone_number,
+                        CONF_ZONE_CLASS: new_zone_class,
                     }
                 )
 

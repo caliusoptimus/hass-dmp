@@ -1,6 +1,5 @@
 """Platform for DMP Alarm Panel integration"""
 import logging
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.components.sensor import (
     SensorEntity
@@ -34,7 +33,7 @@ class DMPZoneStatus(SensorEntity):
         config = hass.data[DOMAIN][config_entry.entry_id]
         _LOGGER.debug("Config is: %s" % entity_config)
         self._accountNum = config.get(CONF_PANEL_ACCOUNT_NUMBER)
-        self._listener = self._hass.data[DOMAIN][LISTENER]
+        self._listener = config.get(LISTENER) or self._hass.data[DOMAIN][LISTENER]
         self._name = "%s Status" % entity_config.get(CONF_ZONE_NAME)
         self._device_name = entity_config.get(CONF_ZONE_NAME)
         self._number = entity_config.get(CONF_ZONE_NUMBER)
@@ -63,20 +62,6 @@ class DMPZoneStatus(SensorEntity):
     async def async_will_remove_from_hass(self):
         _LOGGER.debug("Removing DMPZoneStatus Callback")
         self._listener.remove_callback(self.process_zone_callback)
-        # Removing linked device, since all zones have a status sensor this
-        # is the most logical place to execute this code.
-        device_registry = dr.async_get(self._hass)
-        device_identifiers = list(self.device_info["identifiers"])
-        entity_devices = dr.async_entries_for_config_entry(
-            device_registry,
-            self._config_entry.entry_id
-            )
-        for e in entity_devices:
-            for i in e.identifiers:
-                if i in device_identifiers:
-                    device_registry.async_remove_device(e.id)
-        # for i in device_identifiers:
-            # item = device_registry.async_get_device(i)
 
     async def process_zone_callback(self):
         # _LOGGER.debug("DMPZoneStatus Callback Executed")
@@ -91,7 +76,7 @@ class DMPZoneStatus(SensorEntity):
     @property
     def native_value(self):
         """Return the native value of the device"""
-        return None
+        return self._state
 
     @property
     def name(self):
@@ -102,11 +87,6 @@ class DMPZoneStatus(SensorEntity):
     def should_poll(self):
         """Return the polling state."""
         return False
-
-    @property
-    def state(self):
-        """Return the state of the device."""
-        return self._state
 
     @property
     def extra_state_attributes(self):

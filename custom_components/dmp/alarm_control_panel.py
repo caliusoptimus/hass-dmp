@@ -22,7 +22,7 @@ async def async_setup_entry(hass, entry, async_add_entities,):
     hass.data.setdefault(DOMAIN, {})
     config = hass.data[DOMAIN][entry.entry_id]
     _LOGGER.debug("Alarm control panel config: %s" % config)
-    listener = hass.data[DOMAIN][LISTENER]
+    listener = config.get(LISTENER) or hass.data[DOMAIN][LISTENER]
     area = DMPArea(listener, config)
     areas = []
     areas.append(area)
@@ -120,4 +120,3 @@ class DMPArea(AlarmControlPanelEntity):
     async def async_alarm_arm_night(self, code=None):
         """Send arm night command."""
         await self._panel._dmpSender.arm(self._home_zone, True)
-
