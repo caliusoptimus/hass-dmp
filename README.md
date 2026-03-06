@@ -6,12 +6,11 @@ That said, it seems to break often with updates. I'm having codex handle the pro
 Also, I had an idea to bulk import zones in csv format.
 Currently, lightly tested and working on 2026.3 with an XR150.
 
-CSV Example. Paste this into the csv box to add the 3 zones-
+CSV Example:
 
-zone_number,zone_name,zone_class
-530,Test 1,battery_motion
-531,Test 2,battery_window
-532,Test3,battery_door
+Open example.csv with a text editor and paste lines into the csv box to add the 3 zones.
+
+
 
 
 supports these zone classes:
