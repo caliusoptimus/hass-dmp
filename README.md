@@ -1,52 +1,60 @@
-[![Python package](https://github.com/amattas/hass-dmp/actions/workflows/pythonpackage.yaml/badge.svg)](https://github.com/amattas/hass-dmp/actions/workflows/pythonpackage.yaml) [![Validate with hassfest](https://github.com/amattas/hass-dmp/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/amattas/hass-dmp/actions/workflows/hassfest.yaml)
+# Why I forked this repo:
 
-# DMP Integration for Home Assistant
+I use this integration, it's fantastic, and thank you so much to everyone that has contributed!
 
-Integrate your DMP XR series alarn panel with Home Assistant. This integration provides arming control along with zone monitoring. 
+That said, it seems to break often with updates. I'm having codex handle the problems so I can get back up and running.
 
-## Important Info
-This integration is currently is in BETA. This means things may break or become unreliable. **Please Note: This integration is not designed to replace monitoring of your DMP panel by a UL certified monitoring center, and is solely designed to increase the ease of integrating the supervised sensors with other platforms**
+# Summary of Changes from Codex
 
-## Currently Supported Features
+## Home Assistant 2026.3 compatibility and stability fixes
 
-### Arming and Disarming
-This integration implements a simplified arming/disarming model from the panel's area model to a simple Arm Home/Arm Away/Arm Night model. This aligns better to how these panels are typically deployed in residential settings and also helps integrate better with Home Assistants model. It also facilitiates surfacing the alarm panel to other integrations like HomeKit.
+- Fixed options flow crash on HA 2026.3:
+  - `OptionsFlow.config_entry` became read-only in newer HA.
+  - Updated options flow handler to store its own `_config_entry` reference instead of assigning to `self.config_entry`.
+  - Reason: prevent immediate options/reconfigure flow failure with `AttributeError`.
 
-#### Arm Types
-* Arm Home - arms the home area defined during platform configuration
-* Arm Away - arms areas 01, 02, 03 - not currently configurable 
-* Arm Night - arms the home area with the **instant** flag. This disables delay doors for exit and entry - alarm will trigger immediately if any zone is faulted. Shows as armed home from a status POV (haven't found a way to differentiate)
+- Fixed options/reconfigure robustness with partial form submissions:
+  - Updated options handling to tolerate missing optional add-zone fields.
+  - Only adds a new zone when `zone_name`, `zone_number`, and non-default `zone_class` are all provided.
+  - Reason: HA options forms may omit optional keys; previous code could crash or mis-handle input.
 
-### Zone Monitoring
-This integration provides multiple entities for each zone provided by the panel. 
+- Fixed listener lifecycle and unload/shutdown behavior:
+  - `DMPListener.listen()` now stores the actual server object in `_server`.
+  - `stop()` now safely handles already-stopped state and accepts optional event argument for HA stop callbacks.
+  - `async_setup_entry` now ties update listeners and stop listeners to entry unload via `entry.async_on_unload(...)`.
+  - Reason: avoid unload/reload crashes and callback signature mismatches that became more visible with newer HA/Python.
 
-___Entities shown based on device type:___
-* Window Open/Close (binary sensor)
-* Door Open/Close (binary sensor)
-* Alarm (binary sensor)
-* Trouble (binary sensor)
-* Low Battery (binary sensor)
+- Improved config-entry data handling for multi-entry safety:
+  - Store listener per config entry (`hass.data[DOMAIN][entry_id][LISTENER]`) while preserving global fallback for backward compatibility.
+  - Platform files now prefer per-entry listener and fall back to global listener.
+  - Reason: reduce cross-entry interference without breaking existing setups.
 
-___Entities shown regardless of device type:___
-* Status (sensor - rollup of binary sensors for faults)
-* Bypass (switch - allow for enable/disable of bypass for each zone)
+- Fixed event parsing/state update bugs:
+  - Trouble events now update trouble state (not bypass state).
+  - Prevented possible uninitialized `areaState` usage in arming event branch.
+  - Hardened status refresh path for empty/no-response cases.
+  - Reason: improve state correctness and prevent runtime exceptions during packet handling.
 
-The alarm panel itself has a *Refresh Status* button which will manually query the panel for current zone status. 
+## HA entity model alignment (low-risk, backward-compatible)
 
-It's important to note that in order for these sensor to be updated you must have "Zone Real-Time Status" enabled in the zone information menu for each zone you want real-time status for. Your dealer should be able to easily enable this for you. 
+- Sensor status entity now exposes value through `native_value` (instead of overriding `state`).
+  - Reason: align with HA `SensorEntity` recommendations and improve future compatibility.
 
-Additionally the integration provides a consolidated status sensor that provides a high level overview of each zone. Zone status will be queried when the integration starts (may need to restart after adding new zones to query status). The current armed state is not queried - that is assumed to be disarmed on startup. 
+- Removed manual device-registry deletion during sensor entity removal.
+  - Reason: avoid unintended device removal side effects during reload/unload.
 
-## Setup Instructions
-This integration implements a Home Assistant configuration flow to simplify setup. To install, simply checkout this repo and copy `<REPO>/custom_components/dmp` to `<HASS INSTALL>/config/custom_components/dmp` and restart Home Assistant. Once installed the integration can be added from the control panel by searching for DMP.
+- Fixed invalid binary sensor fallback `device_class` (`None` instead of `"sensors"`).
+  - Reason: `"sensors"` is not a valid HA binary sensor device class.
 
-## Planned Updates
-* Track status of each area individually, support more than areas 01, 02 and 03
-* Validate configuration inputs
-* Simplification of platform code
-* Separation of panel specific listener code
-* Unit testing
-* Dynamic discovery of zones/areas
+- Removed custom switch `device_class = "switch"` usage.
+  - Reason: switch platform does not use device classes this way; remove invalid metadata.
 
-## Credit
-Thank you to [baddienatalie](https://community.home-assistant.io/u/baddienatalie/summary) in the Home Assistant community. They made the first [pass at this integration](https://git.natnat.xyz/hass-dmp-integration/dmp), which was forked and used as the base for this integration. This was my first Home Assistant integration and I have learned a lot along the way. There was a lot of trial and error as I worked through the documentation, and as suchthere is a lot to cleanup and optimize now. 
+- Corrected options selector mapping bug:
+  - “Siren (Wired)” now maps to `wired_siren` (was incorrectly mapped to `wired_motion`).
+  - Reason: prevent misclassification of configured zones.
+
+## Test updates
+
+- Updated listener tests to validate corrected server lifecycle behavior.
+- Added options-flow regression coverage for missing optional fields.
+- Reason: ensure the fixes above are protected against regressions.
