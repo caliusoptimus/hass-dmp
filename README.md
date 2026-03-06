@@ -3,7 +3,7 @@
 I use this integration, it's fantastic, and thank you so much to everyone that has contributed!
 
 That said, it seems to break often with updates. I'm having codex handle the problems so I can get back up and running.
-Also, I had an idea to bulk import zones in csv format. Lightly tested, seems to work well.
+Also, I had an idea to bulk import zones in csv format.
 Currently, lightly tested and working on 2026.3 with an XR150.
 
 CSV Example. Paste this into the csv box to add the 3 zones-
