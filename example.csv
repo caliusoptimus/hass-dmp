@@ -1,0 +1,4 @@
+zone_number,zone_name,zone_class
+530,Test 1,battery_motion
+531,Test 2,battery_window
+532,Test3,battery_door
