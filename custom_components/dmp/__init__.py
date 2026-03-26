@@ -356,16 +356,82 @@ class DMPListener():
     def _searchS3Segment(self, input):
         # example data to be passed to the function: 009"PULL STATION
         # find the single double quote that separates the number from name
+        if not input:
+            return ("", "")
         quotePos = input.find('"')
-        # split the number and name out
-        number = input[:quotePos]
-        name = input[quotePos + 1:]
-        if name is None:
-            name = ""
-        if number is None:
-            number = ""
+        if quotePos == -1:
+            # Some events do not include a quoted name.
+            parts = input.split(maxsplit=1)
+            number = parts[0] if parts else ""
+            name = parts[1] if len(parts) > 1 else ""
+        else:
+            # split the number and name out
+            number = input[:quotePos]
+            name = input[quotePos + 1:]
         _LOGGER.debug("S3Search result Number: %s Name: %s" % (number, name))
         return (number, name)
+
+    def _extract_system_code(self, data):
+        """Extract the 2-char S3 system code from a packet."""
+        code = self._getS3Segment('\\t', data)
+        if not code:
+            return ""
+        # Some messages include a leading qualifier (for example SCL/ADO).
+        return code[-2:]
+
+    def _normalize_area_number(self, area):
+        area_str = str(area).strip()
+        if not area_str:
+            return ""
+        return area_str.lstrip("0") or "0"
+
+    def _is_home_area(self, area):
+        return self._normalize_area_number(area) == self._normalize_area_number(
+            self._home_area
+        )
+
+    def _get_panel_area_snapshot(self, panel):
+        try:
+            area = panel.getArea()
+        except Exception:
+            return {}
+        return area if isinstance(area, dict) else {}
+
+    def _derive_area_state_from_status(self, panel, area_status):
+        """Map DMP status response to a HA alarm state."""
+        current_state = self._get_panel_area_snapshot(panel).get(
+            "areaState", AlarmControlPanelState.DISARMED
+        )
+        if not area_status:
+            return current_state
+
+        armed_areas = [
+            area_num
+            for area_num, details in area_status.items()
+            if details.get("status") == "Armed"
+        ]
+        if not armed_areas:
+            return AlarmControlPanelState.DISARMED
+        if all(self._is_home_area(area_num) for area_num in armed_areas):
+            return AlarmControlPanelState.ARMED_HOME
+        return AlarmControlPanelState.ARMED_AWAY
+
+    def _preferred_area_name(self, panel, area_status):
+        """Pick a stable area label for the alarm entity."""
+        current_name = self._get_panel_area_snapshot(panel).get("areaName", "")
+        if not area_status:
+            return current_name
+
+        # Prefer configured home area label when present.
+        for area_num, details in sorted(area_status.items()):
+            if self._is_home_area(area_num):
+                return details.get("name", "") or current_name
+
+        # Fallback to the first area from status response.
+        for _, details in sorted(area_status.items()):
+            return details.get("name", "") or current_name
+
+        return current_name
 
     def _event_types(self, arg):
         return (DMP_TYPES.get(arg, "Unknown Type " + arg))
@@ -478,7 +544,7 @@ class DMPListener():
                     panel.updateBypassZone(zoneNumber, zoneObj)
                     panel.updateAlarmZone(zoneNumber, zoneObj)
                 elif (eventCode == 'Za' or eventCode == 'Zb'):  # Alarm
-                    systemCode = self._getS3Segment('\\t', data)[1:]
+                    systemCode = self._extract_system_code(data)
                     out = self._searchS3Segment(
                         self._getS3Segment('\\z', data)
                         )
@@ -492,13 +558,16 @@ class DMPListener():
                                "areaState": AlarmControlPanelState.TRIGGERED}
                     panel.updateArea(areaObj)
                 elif (eventCode == 'Zq'):  # Arming Status
-                    systemCode = self._getS3Segment('\\t', data)[1:]
+                    systemCode = self._extract_system_code(data)
                     out = self._searchS3Segment(
                         self._getS3Segment('\\a', data)
                         )
                     areaNumber = out[0]
-                    areaName = out[1]
-                    areaState = panel.getArea().get(
+                    areaName = out[1] or self._get_panel_area_snapshot(panel).get(
+                        "areaName", ""
+                    )
+                    current_area = self._get_panel_area_snapshot(panel)
+                    areaState = current_area.get(
                         "areaState", AlarmControlPanelState.DISARMED
                     )
                     if (systemCode == "OP"):  # Disarm
@@ -506,10 +575,10 @@ class DMPListener():
                         # do a manual status query - bypassed zones are reset but no message for it 
                         self._hass.async_create_task(self.updateStatus())
                     elif (systemCode == "CL"):  # Arm
-                        if (areaNumber[1:] == self._home_area):
+                        if self._is_home_area(areaNumber):
                             # Make sure we're not already armed away
                             if (
-                                panel.getArea()["areaState"] !=
+                                current_area.get("areaState") !=
                                     AlarmControlPanelState.ARMED_AWAY):
                                 areaState = AlarmControlPanelState.ARMED_HOME
                         else:
@@ -519,7 +588,7 @@ class DMPListener():
                     _LOGGER.debug("Updated area: %s" % areaObj)
                     panel.updateArea(areaObj)
                 elif (eventCode == 'Zc'):  # Device status
-                    systemCode = self._getS3Segment('\\t', data)[1:]
+                    systemCode = self._extract_system_code(data)
                     zoneNumber = self._getS3Segment('\\z', data)
                     if (
                         systemCode == "DO"
@@ -562,6 +631,18 @@ class DMPListener():
                 continue
             areaStatus = status[0]
             zoneStatus = status[1]
+
+            # Keep the alarm panel entity synced even when arm/disarm
+            # changes happen at a physical keypad.
+            panel.updateArea(
+                {
+                    "areaName": self._preferred_area_name(panel, areaStatus),
+                    "areaState": self._derive_area_state_from_status(
+                        panel, areaStatus
+                    ),
+                }
+            )
+
             for zone, zoneData in zoneStatus.items():
                 faultZone = {"zoneNumber": zone, "zoneState": True}
                 clearZone = {"zoneNumber": zone, "zoneState": False}
